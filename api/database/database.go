@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/photoview/photoview/api/database/drivers"
+	"github.com/photoview/photoview/api/database/migrations"
 	"github.com/photoview/photoview/api/graphql/models"
 	"github.com/photoview/photoview/api/utils"
 	"github.com/pkg/errors"
@@ -63,6 +64,8 @@ func GetSqliteAddress(path string) (*url.URL, error) {
 	queryValues.Add("cache", "shared")
 	queryValues.Add("mode", "rwc")
 	// queryValues.Add("_busy_timeout", "60000") // 1 minute
+	queryValues.Add("_journal_mode", "WAL")    // Write-Ahead Logging (WAL) mode
+	queryValues.Add("_locking_mode", "NORMAL") // allows concurrent reads and writes
 	address.RawQuery = queryValues.Encode()
 
 	// log.Panicf("%s", address.String())
@@ -72,21 +75,21 @@ func GetSqliteAddress(path string) (*url.URL, error) {
 
 func ConfigureDatabase(config *gorm.Config) (*gorm.DB, error) {
 	var databaseDialect gorm.Dialector
-	switch drivers.DatabaseDriverFromEnv() {
+	driver := drivers.DatabaseDriverFromEnv()
+	log.Printf("Utilizing %s database driver based on environment variables", driver)
+
+	switch driver {
 	case drivers.MYSQL:
 		mysqlAddress, err := GetMysqlAddress(utils.EnvMysqlURL.GetValue())
 		if err != nil {
 			return nil, err
 		}
-		log.Printf("Connecting to MYSQL database: %s", mysqlAddress)
 		databaseDialect = gorm_mysql.Open(mysqlAddress)
-
 	case drivers.SQLITE:
 		sqliteAddress, err := GetSqliteAddress(utils.EnvSqlitePath.GetValue())
 		if err != nil {
 			return nil, err
 		}
-		log.Printf("Opening SQLITE database: %s", sqliteAddress)
 		databaseDialect = sqlite.Open(sqliteAddress.String())
 
 	case drivers.POSTGRES:
@@ -94,7 +97,6 @@ func ConfigureDatabase(config *gorm.Config) (*gorm.DB, error) {
 		if err != nil {
 			return nil, err
 		}
-		log.Printf("Connecting to POSTGRES database: %s", postgresAddress.Redacted())
 		databaseDialect = postgres.Open(postgresAddress.String())
 	}
 
@@ -191,6 +193,11 @@ func MigrateDatabase(db *gorm.DB) error {
 	// from string values to decimal and int respectively
 	if err := migrate_exif_fields(db); err != nil {
 		log.Printf("Failed to run exif fields migration: %v\n", err)
+	}
+
+	// Remove invalid GPS data from DB
+	if err := migrations.MigrateForExifGPSCorrection(db); err != nil {
+		log.Printf("Failed to run exif GPS correction migration: %v\n", err)
 	}
 
 	return nil

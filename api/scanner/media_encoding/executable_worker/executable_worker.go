@@ -2,9 +2,7 @@ package executable_worker
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -14,49 +12,19 @@ import (
 )
 
 func InitializeExecutableWorkers() {
-	DarktableCli = newDarktableWorker()
+	Magick = newMagickCli()
 	FfmpegCli = newFfmpegWorker()
 }
 
-var DarktableCli *DarktableWorker = nil
+var Magick *MagickCli = nil
 var FfmpegCli *FfmpegWorker = nil
 
 type ExecutableWorker interface {
 	Path() string
 }
 
-type DarktableWorker struct {
-	path string
-}
-
 type FfmpegWorker struct {
 	path string
-}
-
-func newDarktableWorker() *DarktableWorker {
-	if utils.EnvDisableRawProcessing.GetBool() {
-		log.Printf("Executable worker disabled (%s=1): darktable\n", utils.EnvDisableRawProcessing.GetName())
-		return nil
-	}
-
-	path, err := exec.LookPath("darktable-cli")
-	if err != nil {
-		log.Println("Executable worker not found: darktable")
-	} else {
-		version, err := exec.Command(path, "--version").Output()
-		if err != nil {
-			log.Printf("Error getting version of darktable: %s\n", err)
-			return nil
-		}
-
-		log.Printf("Found executable worker: darktable (%s)\n", strings.Split(string(version), "\n")[0])
-
-		return &DarktableWorker{
-			path: path,
-		}
-	}
-
-	return nil
 }
 
 func newFfmpegWorker() *FfmpegWorker {
@@ -85,38 +53,8 @@ func newFfmpegWorker() *FfmpegWorker {
 	return nil
 }
 
-func (worker *DarktableWorker) IsInstalled() bool {
-	return worker != nil
-}
-
 func (worker *FfmpegWorker) IsInstalled() bool {
 	return worker != nil
-}
-
-func (worker *DarktableWorker) EncodeJpeg(inputPath string, outputPath string, jpegQuality int) error {
-	tmpDir, err := ioutil.TempDir("/tmp", "photoview-darktable")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	args := []string{
-		inputPath,
-		outputPath,
-		"--core",
-		"--conf",
-		fmt.Sprintf("plugins/imageio/format/jpeg/quality=%d", jpegQuality),
-		"--configdir",
-		tmpDir,
-	}
-
-	cmd := exec.Command(worker.path, args...)
-
-	if err := cmd.Run(); err != nil {
-		return errors.Wrapf(err, "encoding image using: %s %v", worker.path, args)
-	}
-
-	return nil
 }
 
 func (worker *FfmpegWorker) EncodeMp4(inputPath string, outputPath string) error {
@@ -126,6 +64,7 @@ func (worker *FfmpegWorker) EncodeMp4(inputPath string, outputPath string) error
 		"-vcodec", "h264",
 		"-acodec", "aac",
 		"-vf", "scale='min(1080,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+		"-movflags", "+faststart+use_metadata_tags",
 		outputPath,
 	}
 
@@ -143,12 +82,12 @@ func (worker *FfmpegWorker) EncodeVideoThumbnail(inputPath string, outputPath st
 	thumbnailOffsetSeconds := fmt.Sprintf("%d", int(probeData.Format.DurationSeconds*0.25))
 
 	args := []string{
+		"-ss", thumbnailOffsetSeconds, // grab frame at time offset
 		"-i",
 		inputPath,
 		"-vframes", "1", // output one frame
 		"-an", // disable audio
 		"-vf", "scale='min(1024,iw)':'min(1024,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
-		"-ss", thumbnailOffsetSeconds, // grab frame at time offset
 		outputPath,
 	}
 
